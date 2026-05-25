@@ -17,36 +17,24 @@ html, body {
 #root {
   width: 100vw; height: 100vh;
   display: flex; flex-direction: column;
-  align-items: center; justify-content: space-between;
-  padding: 0;
+  align-items: center; justify-content: center;
+  gap: 18px;
+}
+.labels {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%;
 }
 .label {
   font-family: 'DM Mono', monospace;
   text-transform: uppercase;
   color: #a09888;
   text-align: center;
-  line-height: 1.4;
+  line-height: 1.6;
   letter-spacing: .08em;
-  width: 100%;
-  padding: 6px 0 2px;
 }
-#title-bar {
-  font-family: 'Noto Sans KR', sans-serif;
-  font-weight: 900;
-  color: #5a5650;
-  text-align: center;
-  letter-spacing: -.02em;
-  line-height: 1.2;
+.scene {
+  display: flex; align-items: center; justify-content: center;
   width: 100%;
-  padding: 10px 8px 4px;
-  flex-shrink: 0;
-}
-#door-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  flex-shrink: 0;
 }
 .door-wrap { flex-shrink: 0; }
 .door-3d {
@@ -81,24 +69,25 @@ html, body {
 </head>
 <body>
 <div id="root">
-  <!-- 최상단 제목 -->
-  <div id="title-bar">배변 현황 표시 변기칸 잠금 장치</div>
-
-  <!-- 상단: 안쪽 잠금장치 -->
-  <div id="inside-wrap">
-    <svg id="inside" xmlns="http://www.w3.org/2000/svg" style="display:block;"></svg>
-    <div id="touch-overlay" style="position:absolute;border-radius:50%;touch-action:none;cursor:grab;"></div>
+  <div style="font-family:'Noto Sans KR',sans-serif; font-weight:900; font-size:clamp(13px,2.2vw,500px); color:#6b6560; letter-spacing:-.02em; text-align:center;">
+  배변 현황 표시 변기칸 잠금 장치
+</div>
+  <div class="labels" id="labels-row">
+    <div class="label" id="lbl-in">안쪽<br>inside</div>
+    <div style="flex:1"></div>
+    <div class="label" id="lbl-out">바깥쪽<br>outside</div>
   </div>
 
-  <!-- 가운데: 문 -->
-  <div id="door-row">
+  <div class="scene" id="scene">
+    <div style="position:relative;flex-shrink:0;" id="inside-wrap">
+      <svg id="inside" xmlns="http://www.w3.org/2000/svg" style="display:block;"></svg>
+      <div id="touch-overlay" style="position:absolute;border-radius:50%;touch-action:none;cursor:grab;"></div>
+    </div>
     <div class="door-wrap" id="door-wrap">
       <div class="door-3d" id="door"></div>
     </div>
+    <svg id="outside" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0;"></svg>
   </div>
-
-  <!-- 하단: 바깥쪽 잠금장치 -->
-  <svg id="outside" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0;"></svg>
 
   <div class="hint" id="hint">다이얼을 돌려 상태를 설정하세요</div>
 </div>
@@ -124,6 +113,7 @@ let dialCX = 0, dialCY = 0;
 
 const inSVG    = document.getElementById('inside');
 const outSVG   = document.getElementById('outside');
+const inWrap   = document.getElementById('inside-wrap');
 const overlay  = document.getElementById('touch-overlay');
 const doorEl   = document.getElementById('door');
 const doorWrap = document.getElementById('door-wrap');
@@ -136,21 +126,34 @@ function isLand(){ return window.innerWidth > window.innerHeight; }
 /* ── 레이아웃 계산 ── */
 function calcDims(){
   const vw = window.innerWidth, vh = window.innerHeight;
+  const land = isLand();
+  let lockW, lockH, doorW, doorH;
 
-  const lockW   = vw;
-  const titleH  = Math.max(32, Math.floor(vw * 0.07));
-  const hintH   = Math.max(16, Math.floor(vw * 0.03));
-  const doorH   = Math.max(18, Math.floor(vh * 0.08));
-  const doorW   = Math.max(40, Math.floor(vw * 0.12));
-  const gap     = 8; // 요소 간 간격 (총 4개 간격)
-  const remaining = vh - titleH - hintH - doorH - gap * 4;
-  const lockH   = Math.max(60, Math.floor(remaining / 2));
+  if (land) {
+    // 가로: 높이 기준으로 꽉 채움
+    lockH = Math.floor(vh * 0.62);
+    lockW = Math.floor(lockH / 0.52);
+    const maxW = Math.floor((vw - 12) / 2.1);
+    if (lockW > maxW) { lockW = maxW; lockH = Math.floor(lockW * 0.52); }
+    doorW = Math.max(14, Math.floor(vw * 0.022));
+    doorH = Math.floor(lockH * 1.08);
+  } else {
+    // 세로: 너비를 꽉 채움
+    const pad = 4;
+    const totalW = vw - pad * 2;
+    // lock 두 개 + 문 = totalW
+    // lockW * 2 + doorW = totalW, doorW = lockW * 0.07
+    lockW = Math.floor(totalW / 2.07);
+    lockH = Math.floor(lockW * 0.52);
+    doorW = totalW - lockW * 2;
+    doorH = Math.floor(lockH * 1.08);
+  }
 
-  return { lockW, lockH, doorW, doorH, titleH };
+  return { lockW, lockH, doorW, doorH, land };
 }
 
 function applyLayout(d){
-  const { lockW, lockH, doorW, doorH, titleH } = d;
+  const { lockW, lockH, doorW, doorH } = d;
 
   doorWrap.style.width  = doorW + 'px';
   doorWrap.style.height = doorH + 'px';
@@ -161,19 +164,18 @@ function applyLayout(d){
     s.setAttribute('height',  lockH);
     s.setAttribute('viewBox', `0 0 ${lockW} ${lockH}`);
   });
-  document.getElementById('inside-wrap').style.width  = lockW + 'px';
-  document.getElementById('inside-wrap').style.height = lockH + 'px';
+  inWrap.style.width  = lockW + 'px';
+  inWrap.style.height = lockH + 'px';
 
-  // 제목 폰트
-  const titleEl = document.getElementById('title-bar');
-  titleEl.style.fontSize = Math.max(14, Math.floor(lockW * 0.055)) + 'px';
-  titleEl.style.height   = titleH + 'px';
-  titleEl.style.lineHeight = titleH + 'px';
-  titleEl.style.padding  = '0 8px';
+  // label + hint font
+  const lfs = Math.max(9, Math.min(13, lockW * 0.028));
+  document.querySelectorAll('.label').forEach(l => l.style.fontSize = lfs + 'px');
+  hint.style.fontSize = Math.max(8, lfs * 0.82) + 'px';
 
-  // hint 폰트
-  const hfs = Math.max(9, Math.floor(lockW * 0.028));
-  hint.style.fontSize = hfs + 'px';
+  // label row padding
+  const lrow = document.getElementById('labels-row');
+  lrow.style.paddingLeft  = '8px';
+  lrow.style.paddingRight = '8px';
 }
 
 /* ── 다이얼 기하학 ── */
@@ -205,15 +207,14 @@ function getLiveDial(){
 function cacheDial(W, H, g){
   const rect = inSVG.getBoundingClientRect();
   if(!rect.width) return;
-  const scx = rect.width / W, scy = rect.height / H;
-  dialCX = rect.left + g.dx * scx;
-  dialCY = rect.top  + g.dy * scy;
-  const rPx = g.dr * scx;
-  const inWrap = document.getElementById('inside-wrap');
+  const sx = rect.width / W, sy = rect.height / H;
+  dialCX = rect.left + g.dx * sx;
+  dialCY = rect.top  + g.dy * sy;
+  const rPx = g.dr * sx;
   overlay.style.width  = rPx*2 + 'px';
   overlay.style.height = rPx*2 + 'px';
-  overlay.style.left   = (g.dx*scx - rPx) + 'px';
-  overlay.style.top    = (g.dy*scy - rPx) + 'px';
+  overlay.style.left   = (g.dx*sx - rPx) + 'px';
+  overlay.style.top    = (g.dy*sy - rPx) + 'px';
 }
 
 /* ── 그리기 ── */
@@ -274,12 +275,6 @@ function drawInside(W, H, g){
   const lx2 = dx + dr*0.60*Math.cos(a), ly2 = dy + dr*0.60*Math.sin(a);
   const lw  = Math.max(2, dr * 0.08);
 
-  // 잠금장치 본체 왼쪽 빈 공간에 "안쪽 / INSIDE" 텍스트
-  const lblX  = bx * 0.5;          // 본체 왼쪽 여백 중앙
-  const lblY  = by + bh * 0.5;
-  const lblFs = Math.max(8, Math.floor(bx * 0.3));
-  const lblEn = Math.max(6, Math.floor(lblFs * 0.3));
-
   inSVG.innerHTML = `
     <rect x="${f(sx)}" y="${f(sy)}" width="${f(sw)}" height="${f(sh)}" rx="${f(sw*0.35)}" fill="#b8b4b0" stroke="#a0a09a" stroke-width="${f(W*0.004)}"/>
     <rect x="${f(bx)}" y="${f(by)}" width="${f(bw)}" height="${f(bh)}" rx="${f(brx)}" fill="#c8c4c0" stroke="#aeaaa6" stroke-width="${f(W*0.005)}"/>
@@ -289,8 +284,6 @@ function drawInside(W, H, g){
     <circle cx="${f(dx)}" cy="${f(dy)}" r="${f(dr*0.30)}" fill="#a6a6a2" stroke="#929290" stroke-width="${f(W*0.004)}"/>
     <line x1="${f(dx)}" y1="${f(dy)}" x2="${f(lx2)}" y2="${f(ly2)}" stroke="#3a3a38" stroke-width="${f(lw)}" stroke-linecap="round"/>
     <circle cx="${f(dx)}" cy="${f(dy)}" r="${f(dr*0.07)}" fill="#4a4a48"/>
-    <text x="${f(lblX)}" y="${f(lblY - lblFs*0.6)}" text-anchor="middle" dominant-baseline="middle" font-size="${lblFs}" font-weight="900" fill="#7a7268" font-family="'Noto Sans KR',sans-serif" letter-spacing="-0.5">안쪽</text>
-    <text x="${f(lblX)}" y="${f(lblY + lblEn*0.8)}" text-anchor="middle" dominant-baseline="middle" font-size="${lblEn}" fill="#a09888" font-family="'DM Mono',monospace" letter-spacing=".1">INSIDE</text>
   `;
 }
 
@@ -317,12 +310,6 @@ function drawOutside(W, H, g){
   const krFs    = Math.max(12, krFsMax);
   const enFs    = Math.max(9, Math.floor(krFs * 0.38));
 
-  // outside 오른쪽 빈 공간(W - obx 우측 여백 중앙)에 "바깥쪽 / OUTSIDE"
-  const olblX  = obx + obw + (W - obx - obw) * 0.5;
-  const olblY  = oby + obh * 0.5;
-  const olblFs = Math.max(8, Math.floor((W - obx - obw) * 0.3));
-  const olblEn = Math.max(6, Math.floor(olblFs * 0.3));
-
   outSVG.innerHTML = `
     <rect x="${f(obx)}" y="${f(oby)}" width="${f(obw)}" height="${f(obh)}" rx="${f(brx)}" fill="#c8c4c0" stroke="#aeaaa6" stroke-width="${f(W*0.005)}"/>
     <rect x="${f(obx+obw*0.02)}" y="${f(oby+obh*0.05)}" width="${f(obw*0.96)}" height="${f(obh*0.90)}" rx="${f(brx*0.92)}" fill="none" stroke="#dcd8d4" stroke-width="${f(W*0.003)}" opacity=".45"/>
@@ -335,8 +322,6 @@ function drawOutside(W, H, g){
     <circle cx="${f(odx)}" cy="${f(ody)}" r="${f(dr*0.30)}" fill="#a6a6a2" stroke="#929290" stroke-width="${f(W*0.004)}"/>
     <line x1="${f(odx)}" y1="${f(ody)}" x2="${f(lx2)}" y2="${f(ly2)}" stroke="#3a3a38" stroke-width="${f(lw)}" stroke-linecap="round"/>
     <circle cx="${f(odx)}" cy="${f(ody)}" r="${f(dr*0.07)}" fill="#4a4a48"/>
-    <text x="${f(olblX)}" y="${f(olblY - olblFs*0.6)}" text-anchor="middle" dominant-baseline="middle" font-size="${olblFs}" font-weight="900" fill="#7a7268" font-family="'Noto Sans KR',sans-serif" letter-spacing="-0.5">바깥쪽</text>
-    <text x="${f(olblX)}" y="${f(olblY + olblEn*0.8)}" text-anchor="middle" dominant-baseline="middle" font-size="${olblEn}" fill="#a09888" font-family="'DM Mono',monospace" letter-spacing=".1">OUTSIDE</text>
   `;
 }
 
