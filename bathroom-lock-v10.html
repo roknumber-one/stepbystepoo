@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>화장실 잠금 장치</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #ece8e2;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+#root {
+  width: 100vw; height: 100vh;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 18px;
+}
+.labels {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%;
+}
+.label {
+  font-family: 'DM Mono', monospace;
+  text-transform: uppercase;
+  color: #a09888;
+  text-align: center;
+  line-height: 1.6;
+  letter-spacing: .08em;
+}
+.scene {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%;
+}
+.door-wrap { flex-shrink: 0; }
+.door-3d {
+  width: 100%; height: 100%;
+  background: #ccc7bf;
+  border-left: 2px solid #b8b2aa;
+  border-right: 2px solid #b8b2aa;
+  position: relative;
+  transform-origin: left center;
+  transition: transform .6s cubic-bezier(.4,0,.2,1), box-shadow .6s ease;
+  will-change: transform;
+}
+.door-3d.open {
+  transform: perspective(400px) rotateY(-65deg);
+  box-shadow: 6px 0 20px rgba(0,0,0,.15);
+}
+.door-3d::before {
+  content: '';
+  position: absolute;
+  inset: 14% 18%;
+  border: 1.5px solid #b8b2aa;
+}
+.hint {
+  font-family: 'DM Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: #c0b8ae;
+  text-align: center;
+  transition: opacity .4s;
+}
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="labels" id="labels-row">
+    <div class="label" id="lbl-in">안쪽<br>inside</div>
+    <div style="flex:1"></div>
+    <div class="label" id="lbl-out">바깥쪽<br>outside</div>
+  </div>
+
+  <div class="scene" id="scene">
+    <div style="position:relative;flex-shrink:0;" id="inside-wrap">
+      <svg id="inside" xmlns="http://www.w3.org/2000/svg" style="display:block;"></svg>
+      <div id="touch-overlay" style="position:absolute;border-radius:50%;touch-action:none;cursor:grab;"></div>
+    </div>
+    <div class="door-wrap" id="door-wrap">
+      <div class="door-3d" id="door"></div>
+    </div>
+    <svg id="outside" xmlns="http://www.w3.org/2000/svg" style="display:block;flex-shrink:0;"></svg>
+  </div>
+
+  <div class="hint" id="hint">다이얼을 돌려 상태를 설정하세요</div>
+</div>
+
+<script>
+'use strict';
+
+/* ── 상태 정의 ── */
+const STATES = [
+  { kr:'비었음',      en:'vacant',       color:'#4a9e5a', angle:-90  },
+  { kr:'방금 옴',    en:'just arrived',  color:'#e8789a', angle:0    },
+  { kr:'한창임',     en:'in the middle', color:'#c83060', angle:90   },
+  { kr:'거의 다 쌈', en:'almost done',   color:'#8a0a28', angle:165  },
+];
+const N = STATES.length;
+
+let curState  = 0;
+let dialAngle = STATES[0].angle; // 바늘의 실제 각도 (자유롭게 이동)
+let active    = false;
+let startPtrAngle = 0;
+let startDialAngle = 0;
+let dialCX = 0, dialCY = 0;
+
+const inSVG    = document.getElementById('inside');
+const outSVG   = document.getElementById('outside');
+const inWrap   = document.getElementById('inside-wrap');
+const overlay  = document.getElementById('touch-overlay');
+const doorEl   = document.getElementById('door');
+const doorWrap = document.getElementById('door-wrap');
+const hint     = document.getElementById('hint');
+
+function d2r(d){ return d * Math.PI / 180; }
+function f(n)  { return +n.toFixed(2); }
+function isLand(){ return window.innerWidth > window.innerHeight; }
+
+/* ── 레이아웃 계산 ── */
+function calcDims(){
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const land = isLand();
+  let lockW, lockH, doorW, doorH;
+
+  if (land) {
+    // 가로: 높이 기준으로 꽉 채움
+    lockH = Math.floor(vh * 0.62);
+    lockW = Math.floor(lockH / 0.52);
+    const maxW = Math.floor((vw - 12) / 2.1);
+    if (lockW > maxW) { lockW = maxW; lockH = Math.floor(lockW * 0.52); }
+    doorW = Math.max(14, Math.floor(vw * 0.022));
+    doorH = Math.floor(lockH * 1.08);
+  } else {
+    // 세로: 너비를 꽉 채움
+    const pad = 4;
+    const totalW = vw - pad * 2;
+    // lock 두 개 + 문 = totalW
+    // lockW * 2 + doorW = totalW, doorW = lockW * 0.07
+    lockW = Math.floor(totalW / 2.07);
+    lockH = Math.floor(lockW * 0.52);
+    doorW = totalW - lockW * 2;
+    doorH = Math.floor(lockH * 1.08);
+  }
+
+  return { lockW, lockH, doorW, doorH, land };
+}
+
+function applyLayout(d){
+  const { lockW, lockH, doorW, doorH } = d;
+
+  doorWrap.style.width  = doorW + 'px';
+  doorWrap.style.height = doorH + 'px';
+  doorWrap.style.flexShrink = '0';
+
+  [inSVG, outSVG].forEach(s => {
+    s.setAttribute('width',   lockW);
+    s.setAttribute('height',  lockH);
+    s.setAttribute('viewBox', `0 0 ${lockW} ${lockH}`);
+  });
+  inWrap.style.width  = lockW + 'px';
+  inWrap.style.height = lockH + 'px';
+
+  // label + hint font
+  const lfs = Math.max(9, Math.min(13, lockW * 0.028));
+  document.querySelectorAll('.label').forEach(l => l.style.fontSize = lfs + 'px');
+  hint.style.fontSize = Math.max(8, lfs * 0.82) + 'px';
+
+  // label row padding
+  const lrow = document.getElementById('labels-row');
+  lrow.style.paddingLeft  = '8px';
+  lrow.style.paddingRight = '8px';
+}
+
+/* ── 다이얼 기하학 ── */
+function dialGeom(W, H){
+  const bx = W * 0.10, by = H * 0.10;
+  const bw = W - bx - W * 0.02, bh = H * 0.80;
+  const brx = bh / 2;
+  const dr  = bh * 0.43;                   // 다이얼 반지름 크게
+  const pad = W * 0.025;
+  const dx  = bx + bw - dr - pad;
+  const dy  = by + bh / 2;
+  const sx  = bx - W*0.09, sy = by+bh*0.15, sw = W*0.08, sh = bh*0.70;
+  return { bx, by, bw, bh, brx, dr, dx, dy, sx, sy, sw, sh };
+}
+
+/* ── 다이얼 중심: 항상 실시간 계산 (cached는 overlay 위치용만) ── */
+function getLiveDial(){
+  const dims = calcDims();
+  const { lockW:W, lockH:H } = dims;
+  const g = dialGeom(W, H);
+  const rect = inSVG.getBoundingClientRect();
+  if(!rect.width) return { cx:dialCX, cy:dialCY };
+  return {
+    cx: rect.left + g.dx * (rect.width  / W),
+    cy: rect.top  + g.dy * (rect.height / H),
+  };
+}
+
+function cacheDial(W, H, g){
+  const rect = inSVG.getBoundingClientRect();
+  if(!rect.width) return;
+  const sx = rect.width / W, sy = rect.height / H;
+  dialCX = rect.left + g.dx * sx;
+  dialCY = rect.top  + g.dy * sy;
+  const rPx = g.dr * sx;
+  overlay.style.width  = rPx*2 + 'px';
+  overlay.style.height = rPx*2 + 'px';
+  overlay.style.left   = (g.dx*sx - rPx) + 'px';
+  overlay.style.top    = (g.dy*sy - rPx) + 'px';
+}
+
+/* ── 그리기 ── */
+function draw(){
+  const dims = calcDims();
+  applyLayout(dims);
+  const { lockW:W, lockH:H } = dims;
+  const g = dialGeom(W, H);
+  drawInside(W, H, g);
+  drawOutside(W, H, g);
+  cacheDial(W, H, g);
+}
+
+function drawInside(W, H, g){
+  const { bx, by, bw, bh, brx, dr, dx, dy, sx, sy, sw, sh } = g;
+  const sliceA = 360 / N;
+
+  // 섹터 텍스트 최적 폰트 크기: 섹터 호 길이 기준
+  // 내부 링 너비 = ro - ri, 호 중점 기준 최대 글자 공간
+  const ri = dr * 0.30, ro = dr * 0.92;
+  const ringW = ro - ri;                         // 링 폭
+  const arcMid = (ri + ro) / 2;
+  const arcLen = arcMid * 2 * Math.PI / N;       // 중간 반지름에서의 호 길이
+  // 글자 공간: 호 방향 = arcLen * 0.72, 반지름 방향 = ringW * 0.72
+  const maxW = arcLen * 0.72, maxH = ringW * 0.72;
+
+  let sectors = '';
+  STATES.forEach((s, i) => {
+    const a0 = d2r(-90 + i*sliceA + 1.5);
+    const a1 = d2r(-90 + (i+1)*sliceA - 1.5);
+    const x0=dx+ro*Math.cos(a0), y0=dy+ro*Math.sin(a0);
+    const x1=dx+ro*Math.cos(a1), y1=dy+ro*Math.sin(a1);
+    const x2=dx+ri*Math.cos(a1), y2=dy+ri*Math.sin(a1);
+    const x3=dx+ri*Math.cos(a0), y3=dy+ri*Math.sin(a0);
+    const act = i === curState;
+    sectors += `<path d="M${f(x0)},${f(y0)} A${ro},${ro} 0 0,1 ${f(x1)},${f(y1)} L${f(x2)},${f(y2)} A${ri},${ri} 0 0,0 ${f(x3)},${f(y3)} Z" fill="${s.color}" opacity="${act?1:0.25}"/>`;
+
+    // 섹터 중앙 위치 + 회전
+    const lA  = d2r(-90 + (i+0.5)*sliceA);
+    const lx  = dx + arcMid * Math.cos(lA);
+    const ly  = dy + arcMid * Math.sin(lA);
+    const rot = -90 + (i+0.5)*sliceA + 90; // 텍스트를 호 접선 방향으로
+
+    // 글자가 섹터 안에 딱 맞는 폰트 크기
+    // 가장 긴 글자는 "거의 다 쌈" (6글자 + 공백)
+    // 한글 1글자 ≈ 폰트크기 * 1.0 (정사각형)
+    const chars   = s.kr.replace(/\s/g,'').length + (s.kr.includes(' ') ? 0.5 : 0);
+    // 호 방향으로 글자 나열 시 총 너비 ≈ chars * fs
+    // arcLen * 0.72 >= chars * fs  →  fs <= arcLen*0.72/chars
+    const fsByArc = maxW / Math.max(chars, 1);
+    const fsByH   = maxH;
+    const fs      = Math.floor(Math.min(fsByArc, fsByH) * 0.88);
+
+    sectors += `<text transform="translate(${f(lx)},${f(ly)}) rotate(${f(rot)})" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="white" font-family="'Noto Sans KR',sans-serif" letter-spacing="-0.5">${s.kr}</text>`;
+  });
+
+  const a   = d2r(dialAngle);
+  const lx2 = dx + dr*0.60*Math.cos(a), ly2 = dy + dr*0.60*Math.sin(a);
+  const lw  = Math.max(2, dr * 0.08);
+
+  inSVG.innerHTML = `
+    <rect x="${f(sx)}" y="${f(sy)}" width="${f(sw)}" height="${f(sh)}" rx="${f(sw*0.35)}" fill="#b8b4b0" stroke="#a0a09a" stroke-width="${f(W*0.004)}"/>
+    <rect x="${f(bx)}" y="${f(by)}" width="${f(bw)}" height="${f(bh)}" rx="${f(brx)}" fill="#c8c4c0" stroke="#aeaaa6" stroke-width="${f(W*0.005)}"/>
+    <rect x="${f(bx+bw*0.02)}" y="${f(by+bh*0.05)}" width="${f(bw*0.96)}" height="${f(bh*0.90)}" rx="${f(brx*0.92)}" fill="none" stroke="#dcd8d4" stroke-width="${f(W*0.003)}" opacity=".45"/>
+    <circle cx="${f(dx)}" cy="${f(dy)}" r="${f(dr)}" fill="#bab6b2" stroke="#a6a29e" stroke-width="${f(W*0.005)}"/>
+    ${sectors}
+    <circle cx="${f(dx)}" cy="${f(dy)}" r="${f(dr*0.30)}" fill="#a6a6a2" stroke="#929290" stroke-width="${f(W*0.004)}"/>
+    <line x1="${f(dx)}" y1="${f(dy)}" x2="${f(lx2)}" y2="${f(ly2)}" stroke="#3a3a38" stroke-width="${f(lw)}" stroke-linecap="round"/>
+    <circle cx="${f(dx)}" cy="${f(dy)}" r="${f(dr*0.07)}" fill="#4a4a48"/>
+  `;
+}
+
+function drawOutside(W, H, g){
+  const s = STATES[curState];
+  const { bx, by, bw, bh, brx, dr, dx, dy } = g;
+  // outside: 미러
+  const obx = W*0.02, oby = by;
+  const obw = bw, obh = bh;
+  const odx = obx + dr + W*0.025, ody = oby + obh/2;
+  const osx = obx+obw-2, osy = oby+obh*0.15, osw = W*0.08, osh = obh*0.70;
+
+  // 상태 표시창
+  const stw = obw*0.40, sth = obh*0.65;
+  const stx = obx+obw - stw - W*0.025, sty = oby+(obh-sth)/2;
+
+  const a   = d2r(dialAngle);
+  const lx2 = odx + dr*0.60*Math.cos(a), ly2 = ody + dr*0.60*Math.sin(a);
+  const lw  = Math.max(2, dr * 0.08);
+
+  // 표시창 텍스트 크기: 창 안에 딱 맞게
+  const krLen   = s.kr.length;
+  const krFsMax = Math.floor(Math.min(stw * 0.80 / krLen * 1.6, sth * 0.38));
+  const krFs    = Math.max(12, krFsMax);
+  const enFs    = Math.max(9, Math.floor(krFs * 0.38));
+
+  outSVG.innerHTML = `
+    <rect x="${f(obx)}" y="${f(oby)}" width="${f(obw)}" height="${f(obh)}" rx="${f(brx)}" fill="#c8c4c0" stroke="#aeaaa6" stroke-width="${f(W*0.005)}"/>
+    <rect x="${f(obx+obw*0.02)}" y="${f(oby+obh*0.05)}" width="${f(obw*0.96)}" height="${f(obh*0.90)}" rx="${f(brx*0.92)}" fill="none" stroke="#dcd8d4" stroke-width="${f(W*0.003)}" opacity=".45"/>
+    <rect x="${f(osx)}" y="${f(osy)}" width="${f(osw)}" height="${f(osh)}" rx="${f(osw*0.35)}" fill="#b8b4b0" stroke="#a0a09a" stroke-width="${f(W*0.004)}"/>
+    <rect x="${f(stx)}" y="${f(sty)}" width="${f(stw)}" height="${f(sth)}" rx="${f(sth*0.09)}" fill="${s.color}"/>
+    <rect x="${f(stx+1)}" y="${f(sty+1)}" width="${f(stw-2)}" height="${f(sth*0.38)}" rx="${f(sth*0.08)}" fill="rgba(255,255,255,0.10)"/>
+    <text x="${f(stx+stw/2)}" y="${f(sty+sth*0.42)}" text-anchor="middle" dominant-baseline="middle" font-size="${krFs}" font-weight="900" fill="white" font-family="'Noto Sans KR',sans-serif" letter-spacing="-0.5">${s.kr}</text>
+    <text x="${f(stx+stw/2)}" y="${f(sty+sth*0.74)}" text-anchor="middle" dominant-baseline="middle" font-size="${enFs}" fill="rgba(255,255,255,0.75)" font-family="'DM Mono',monospace" letter-spacing=".2">${s.en}</text>
+    <circle cx="${f(odx)}" cy="${f(ody)}" r="${f(dr)}" fill="#bab6b2" stroke="#a6a29e" stroke-width="${f(W*0.005)}"/>
+    <circle cx="${f(odx)}" cy="${f(ody)}" r="${f(dr*0.30)}" fill="#a6a6a2" stroke="#929290" stroke-width="${f(W*0.004)}"/>
+    <line x1="${f(odx)}" y1="${f(ody)}" x2="${f(lx2)}" y2="${f(ly2)}" stroke="#3a3a38" stroke-width="${f(lw)}" stroke-linecap="round"/>
+    <circle cx="${f(odx)}" cy="${f(ody)}" r="${f(dr*0.07)}" fill="#4a4a48"/>
+  `;
+}
+
+/* ── 문 ── */
+function setDoor(open){
+  if(open) doorEl.classList.add('open');
+  else     doorEl.classList.remove('open');
+}
+
+function normDelta(d){
+  while(d >  180) d -= 360;
+  while(d < -180) d += 360;
+  return d;
+}
+
+/* ── 상태 전환 핵심 로직 ──────────────────────────────────
+   섹터는 360/N 도씩 균등 배치.
+   경계선(-90, 0, 90, 180)을 바늘이 넘는 순간 즉시 전환.
+────────────────────────────────────────────────────────── */
+function passed(from, to, target){
+  const d  = normDelta(to     - from);
+  const dt = normDelta(target - from);
+  if(d > 0) return dt > 0 && dt <= d;
+  if(d < 0) return dt < 0 && dt >= d;
+  return false;
+}
+
+/* 주어진 각도가 속하는 섹터 인덱스 */
+function angleToSector(angle){
+  const sliceA = 360 / N;
+  let a = ((angle - (-90)) % 360 + 360) % 360;
+  return Math.floor(a / sliceA) % N;
+}
+
+let prevAngle = STATES[0].angle;
+
+function checkTransition(fromAngle, toAngle){
+  const sliceA = 360 / N;
+  // 경계선 목록: -90, 0, 90, 180
+  const boundaries = Array.from({length: N}, (_, i) => -90 + i * sliceA);
+  const d = normDelta(toAngle - fromAngle);
+
+  // 통과한 경계선 중 가장 가까운 것
+  let closest = null, closestDt = Infinity;
+  for(const b of boundaries){
+    if(passed(fromAngle, toAngle, b)){
+      const dt = Math.abs(normDelta(b - fromAngle));
+      if(dt < closestDt){ closestDt = dt; closest = b; }
+    }
+  }
+
+  if(closest !== null){
+    // 경계선을 막 넘어선 위치로 섹터 판정
+    const afterAngle = closest + (d > 0 ? 0.001 : -0.001);
+    return angleToSector(afterAngle);
+  }
+  return curState;
+}
+
+function applyState(idx){
+  if(idx === curState) return;
+  const wasVacant = curState === 0;
+  const isVacant  = idx === 0;
+  curState = idx;
+  if(isVacant !== wasVacant){
+    setDoor(isVacant);
+    hint.style.opacity = isVacant ? '0' : '1';
+  }
+}
+
+/* ── 포인터 각도: 매번 실시간 다이얼 중심으로 계산 ── */
+function ptAngle(ex, ey){
+  const { cx, cy } = getLiveDial();
+  return Math.atan2(ey - cy, ex - cx) * 180 / Math.PI;
+}
+
+/* ── 드래그 시작 ── */
+function onStart(ex, ey){
+  active = true;
+  overlay.style.cursor = 'grabbing';
+  // 시작 시점의 다이얼 중심 확정
+  const { cx, cy } = getLiveDial();
+  dialCX = cx; dialCY = cy;
+  startPtrAngle  = Math.atan2(ey - cy, ex - cx) * 180 / Math.PI;
+  startDialAngle = dialAngle;
+  prevAngle      = dialAngle;
+}
+
+/* ── 드래그 이동 ── */
+function onMove(ex, ey){
+  if(!active) return;
+  // 드래그 중에는 시작 시점의 중심(고정)으로 각도 계산 → 흔들림 없음
+  const curPtrAngle = Math.atan2(ey - dialCY, ex - dialCX) * 180 / Math.PI;
+  const delta = normDelta(curPtrAngle - startPtrAngle);
+  const newAngle = startDialAngle + delta;
+
+  const next = checkTransition(prevAngle, newAngle);
+  if(next !== curState) applyState(next);
+
+  prevAngle = newAngle;
+  dialAngle = newAngle;
+
+  // 그리기: layout recalc 없이 현재 치수 재사용
+  const dims = calcDims();
+  const { lockW:W, lockH:H } = dims;
+  const g = dialGeom(W, H);
+  drawInside(W, H, g);
+  drawOutside(W, H, g);
+  // overlay 위치는 드래그 중 갱신 안 함 (시작 시점 고정)
+}
+
+/* ── 드래그 끝 ── */
+function onEnd(){
+  if(!active) return;
+  active = false;
+  overlay.style.cursor = 'grab';
+  dialAngle = STATES[curState].angle;
+  prevAngle = dialAngle;
+  draw(); // 끝날 때 전체 redraw + overlay 재배치
+}
+
+/* ── 이벤트 연결 ── */
+// 마우스
+overlay.addEventListener('mousedown', e => {
+  e.preventDefault();
+  onStart(e.clientX, e.clientY);
+});
+window.addEventListener('mousemove', e => {
+  if(active) onMove(e.clientX, e.clientY);
+});
+window.addEventListener('mouseup', () => onEnd());
+
+// 터치 — overlay에 직접 걸어야 iOS Safari에서 첫 터치가 씹히지 않음
+overlay.addEventListener('touchstart', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  const t = e.changedTouches[0];
+  onStart(t.clientX, t.clientY);
+}, { passive: false });
+
+overlay.addEventListener('touchmove', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  if(!active) return;
+  const t = e.changedTouches[0];
+  onMove(t.clientX, t.clientY);
+}, { passive: false });
+
+overlay.addEventListener('touchend', e => {
+  e.preventDefault();
+  onEnd();
+}, { passive: false });
+
+overlay.addEventListener('touchcancel', () => onEnd());
+
+window.addEventListener('resize', () => {
+  // 드래그 중 회전 시 강제 종료 후 redraw
+  if(active){ active = false; dialAngle = STATES[curState].angle; }
+  draw();
+});
+
+/* ── 초기화 ── */
+draw();
+setDoor(true);
+hint.style.opacity = '0';
+</script>
+</body>
+</html>
